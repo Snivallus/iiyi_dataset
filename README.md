@@ -8,7 +8,7 @@ This repository contains scripts for constructing a medical case dataset from [i
 
 ```bash
 iiyi_dataset/
-├── README.md
+├── README.md       # This file
 ├── .gitignore
 ├── requirements.txt
 ├── spider/         # Web crawling scripts
@@ -53,7 +53,7 @@ Follow the instructions in [spider/README.md](https://github.com/Snivallus/iiyi_
 
 ```bash
 iiyi_dataset/
-├── Spider/
+├── spider/
 │   ├── succeeded_cases.json    # Cases that have been successfully crawled
 │   ├── failed_cases.json       # Cases that failed to be crawled
 │   ├── raw_images/             # Images downloaded from the website
@@ -72,11 +72,11 @@ iiyi_dataset/
 
 ### 2. Data Filtering Using Baichuan2
 
-Run `../case_filter.py` to filter `succeeded_cases.json` and `raw_images/` to get:
+Run `case_filter.py` to filter `spider/succeeded_cases.json` and `spider/raw_images/` to get:
 
 ```bash
 iiyi_dataset/
-├── Spider/
+├── spider/
 │   ├── filtered_cases.json    # Filtered cases
 │   ├── filtered_images/       # Filtered images
 │   │   ├── case_0000/
@@ -97,7 +97,7 @@ You can experiment with the model using `quick_start_of_Baichuan2.py`.
 
 ### 3. Analyze case statistics
 
-Run `../case_statistics.py` on `filtered_cases.json` to get something like:
+Run `case_statistics.py` on `spider/filtered_cases.json` to get something like:
 
 ```bash
 内容.病案介绍.个人史
@@ -122,11 +122,11 @@ Thus, it helps us to determine useful patterns for the case rewriting stage.
 ### 4. Rewrite Cases Using DeepSeek
 
 This step uses DeepSeek to reorganize the raw case content into a structured format.  
-Run `../case_rewrite.py` to get `rewritten_cases.json`.
+Run `case_rewrite.py` to get `spider/rewritten_cases.json`.
 
 ```bash
 iiyi_dataset/
-├── Spider/
+├── spider/
 │   ├── rewritten_cases.json    # Rewritten cases
 │   └── ...
 └── ...
@@ -135,7 +135,7 @@ iiyi_dataset/
 ### 5. Final Filtering
 
 This step filters those cases that diagnoses is absent.
-Run `../case_final.py` on `rewritten_cases.json` to get `results/`.
+Run `case_final.py` on `spider/rewritten_cases.json` to get `results/`.
 
 ```bash
 iiyi_dataset/
