@@ -11,6 +11,7 @@ from transformers import AutoModelForCausalLM
 from transformers.generation.utils import GenerationConfig
 import re
 from quick_start import load_model, load_tokenizer # help functions from quick_start.py
+from utils import Tee, dump_case_incrementally # help functions from utils.py
 
 # ======================
 # Model config
@@ -21,7 +22,7 @@ CACHE_DIR = Path("./cache")
 
 DTYPE = torch.bfloat16
 
-MAX_CASE_TEXT_LENGTH = 3000 # 限制输入文本长度，避免显存爆炸
+MAX_CASE_TEXT_LENGTH = 3000 # 限制输入文本长度, 避免显存爆炸
 DUPLICATE_STRING_MIN_LEN = 10 # 判断不同 case 字符串完全重复的最小长度阈值
 
 # ======================
@@ -37,19 +38,6 @@ log_file = os.path.join(
     LOG_DIR,
     f"run_filter_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
 )
-
-class Tee:
-    def __init__(self, filename):
-        self.file = open(filename, "a", encoding="utf-8")
-        self.stdout = sys.stdout
-
-    def write(self, message):
-        self.stdout.write(message)
-        self.file.write(message)
-
-    def flush(self):
-        self.stdout.flush()
-        self.file.flush()
 
 sys.stdout = Tee(log_file)
 sys.stderr = sys.stdout
@@ -212,17 +200,6 @@ def copy_images(old_paths, new_case_idx, new_root):
     return new_paths
 
 # ======================
-# Dump cases incrementally (for debugging)
-# ======================
-def dump_case_incrementally(output_json, metadata, cases):
-    output = {
-        "metadata": metadata,
-        "cases": cases
-    }
-    with open(output_json, "w", encoding="utf-8") as f:
-        json.dump(output, f, ensure_ascii=False, indent=2)
-
-# ======================
 # 检查对象或其嵌套字典中是否有键名包含“诊断”
 # ======================
 def has_diagnosis_key(obj):
@@ -259,10 +236,10 @@ PROMPT_TEMPLATE_1 = """
 标题：{title}
 诊断内容：{diagnosis_combined}
 
-如果诊断与标题内容相关，回答：是
-如果不相关，回答：否
+如果诊断与标题内容相关, 回答：是
+如果不相关, 回答：否
 
-不要输出解释，只输出“是”或“否”。
+不要输出解释, 只输出“是”或“否”。
 """
 
 PROMPT_TEMPLATE_2 = """
@@ -272,9 +249,9 @@ PROMPT_TEMPLATE_2 = """
 判断下面的病例是否包含【明确诊断结果】。
 
 “明确诊断结果”的定义：
-1. 有清晰的疾病名称或临床诊断结论，无需猜测。
+1. 有清晰的疾病名称或临床诊断结论, 无需猜测。
 2. 排除“可能”、“疑似”、“待排查”等不确定表述。
-3. 可以来自病例的任何部分，包括：
+3. 可以来自病例的任何部分, 包括：
    - 标题
    - 简要描述
    - 摘要
@@ -283,9 +260,9 @@ PROMPT_TEMPLATE_2 = """
    - 其他临床信息段落
 
 注意：
-- 只要病例文本中暗示了最终诊断结果，即使没有专门的“诊断”字段，也应判断为“是”。
-- 如果病例没有任何明确或可推断的诊断信息，判断为“否”。
-- 不要输出任何解释、理由或额外文本，只回答“是”或“否”。
+- 只要病例文本中暗示了最终诊断结果, 即使没有专门的“诊断”字段, 也应判断为“是”。
+- 如果病例没有任何明确或可推断的诊断信息, 判断为“否”。
+- 不要输出任何解释、理由或额外文本, 只回答“是”或“否”。
 
 病例：
 {case_text}
@@ -305,6 +282,9 @@ def filter_cases(
     top_p=0.9,
     max_new_tokens=1
 ):
+    # -------------------
+    # 加载 tokenizer 和模型
+    # -------------------
     tokenizer = load_tokenizer()
 
     model = AutoModelForCausalLM.from_pretrained(
@@ -317,6 +297,7 @@ def filter_cases(
         cache_dir=CACHE_DIR,
     )
 
+    # 加载并修改 generation 配置
     model.generation_config = GenerationConfig.from_pretrained(
         MODEL_NAME,
         revision=MODEL_REVISION,
@@ -327,15 +308,29 @@ def filter_cases(
     model.generation_config.top_p = top_p
     model.generation_config.max_new_tokens = max_new_tokens
 
+    # -------------------
+    # 读取输入 JSON
+    # -------------------
     with open(input_json, encoding="utf-8") as f:
         data = json.load(f)
 
     cases = data["cases"]
 
     # -------------------
-    # 去重（跨 case + 内部重复）
+    # 去重准备（跨 case + 内部重复）
     # -------------------
-
+    # string_to_case_idx:
+    #   记录某个字符串出现在哪些 case 中
+    #   string -> {case_idx1, case_idx2, ...}
+    #
+    # case_idx_to_strings:
+    #   每个 case 中出现的字符串及其路径
+    #   case_idx -> [(string, path), ...]
+    #
+    # case_string_count:
+    #   每个 case 中每个字符串出现次数
+    #   case_idx -> {string: count}
+    # -------------------
     string_to_case_idx = {}
     case_idx_to_strings = {}
     case_string_count = {}
@@ -344,12 +339,19 @@ def filter_cases(
 
         case_idx = case["case_idx"]
 
+        # collected:
+        #   存储该 case 中所有字符串及其路径
+        #   [(string, "字段路径"), ...]
         collected = []
 
+        # -------------------
+        # 递归提取 case 中的所有字符串
+        # -------------------
         def collect_strings(obj, path=""):
 
             if isinstance(obj, str):
 
+                # 记录字符串及其字段路径
                 collected.append((obj, path))
 
             elif isinstance(obj, dict):
@@ -372,15 +374,22 @@ def filter_cases(
 
         case_idx_to_strings[case_idx] = collected
 
+        # -------------------
+        # 统计字符串出现次数
+        # -------------------
+
         string_count = {}
 
         for s, path in collected:
 
+            # 忽略过短字符串
             if len(s) < DUPLICATE_STRING_MIN_LEN:
                 continue
 
+            # 记录该 case 内出现次数
             string_count[s] = string_count.get(s, 0) + 1
 
+            # 记录该字符串出现在哪些 case
             if s not in string_to_case_idx:
                 string_to_case_idx[s] = set()
 
@@ -389,19 +398,24 @@ def filter_cases(
         case_string_count[case_idx] = string_count
 
     # -------------------
-    # 只删除：
-    # 既跨 case 重复 AND 在本 case 内重复
+    # 跨 case + 内部重复判定
+    #
+    # 只删除满足以下两个条件的 case: 
+    #
+    # 1. 某字符串在该 case 中出现 >= 2 次
+    # 2. 同时该字符串也出现在其他 case 中
     # -------------------
-
     duplicate_case_idx = {}
 
     for case_idx, string_count in case_string_count.items():
 
         for s, count in string_count.items():
 
+            # case 内必须重复
             if count < 2:
                 continue
 
+            # 该字符串必须跨 case 出现
             if len(string_to_case_idx.get(s, set())) <= 1:
                 continue
 
@@ -414,6 +428,9 @@ def filter_cases(
 
         idx = case["case_idx"]
 
+        # -------------------
+        # 删除跨 case + 内部重复的 case
+        # -------------------
         if idx in duplicate_case_idx:
 
             discarded_cases.append(case)
@@ -426,34 +443,35 @@ def filter_cases(
             continue
 
         # -------------------
-        # 同一 case 内部重复
+        # 同一 case 内部重复清理
+        # 
+        # 如果一个字符串在多个字段重复, 
+        # 删除重复字段, 只保留一个.
         # -------------------
-
         pairs = case_idx_to_strings[idx]
 
+        # string -> [path1, path2, ...]
         string_paths = {}
 
         for s, path in pairs:
-
             if len(s) < DUPLICATE_STRING_MIN_LEN:
                 continue
-
             string_paths.setdefault(s, []).append(path)
 
         repeated_strings = []
 
         for s, paths in string_paths.items():
-
             if len(paths) <= 1:
                 continue
-
+            # 忽略仅标题重复的情况
             non_title_paths = [p for p in paths if not p.startswith("标题")]
-
             if len(non_title_paths) <= 1:
                 continue
-
             repeated_strings.append(s)
 
+        # -------------------
+        # 删除重复字段
+        # -------------------
         if repeated_strings:
 
             def remove_repeated(obj, path=""):
@@ -466,6 +484,7 @@ def filter_cases(
 
                         new_path = f"{path}.{k}" if path else k
 
+                        # 永远保留标题
                         if new_path == "标题":
                             continue
 
@@ -507,7 +526,9 @@ def filter_cases(
     )
 
     # -------------------
-    # 模型筛选（过滤明确诊断）
+    # 模型筛选
+    # 
+    # 使用 LLM 判断 case 是否包含明确诊断
     # -------------------
     new_root = Path(new_image_root)
 
@@ -518,59 +539,45 @@ def filter_cases(
 
         old_idx = case["case_idx"]
 
+        # 如果 case 中存在诊断相关字段
         if has_diagnosis_key(case):
-
             title = case.get("标题", "")
-
             diagnosis_texts = collect_diagnosis_text(case)
-
             diagnosis_combined = "；".join(diagnosis_texts)
-
             prompt = PROMPT_TEMPLATE_1.format(
                 title=title,
                 diagnosis_combined=diagnosis_combined
             )
-
             keep = judge_case(model, tokenizer, prompt, vote_rounds)
-
         else:
-
+            # 否则使用完整 case 文本判断
             case_text = case_to_text(case)
-
             prompt = PROMPT_TEMPLATE_2.format(case_text=case_text)
-
             keep = judge_case(model, tokenizer, prompt, vote_rounds)
 
+        # -------------------
+        # 保留 case
+        # -------------------
         if keep:
-
             new_idx = len(final_kept_cases)
-
             new_case = case.copy()
-
             new_case["case_idx"] = new_idx
 
+            # 复制图片到新目录
             imgs = case.get("images", [])
-
             old_paths = [os.path.join(image_root, img) for img in imgs]
-
             new_paths = copy_images(old_paths, new_idx, new_root)
-
             new_case["images"] = new_paths
-
             final_kept_cases.append(new_case)
-
             print(f"Kept case {old_idx} as new case {new_idx}\n")
 
         else:
-
             final_discarded_cases.append(case)
-
             print(f"Discarded by model case {old_idx}\n")
 
     # -------------------
-    # 输出 JSON
+    # 输出结果 JSON
     # -------------------
-
     dump_case_incrementally(
         output_json,
         {"total_cases": len(final_kept_cases)},
