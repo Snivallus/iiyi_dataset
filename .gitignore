@@ -1,0 +1,15 @@
+# Model cache / large files
+cache/
+offload_tmp/
+logs/
+
+# Virtual environments
+venv/
+.env/
+.venv/
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
