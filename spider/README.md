@@ -41,8 +41,8 @@ Generated files:
 Each file contains only case titles and URLs.   
 
 Note that `msedgedriver.exe` is required by `click_seemore.py` for browser automation.  
-You can download it from [here](https://developer.microsoft.com/en-us/microsoft-edge/tools/webdriver/).  
-Make sure the version aligns with your Edge browser version.
+You can download it from [microsoft-edge/tools/webdriver](https://developer.microsoft.com/en-us/microsoft-edge/tools/webdriver/).  
+Make sure the WebDriver version matches your installed Microsoft Edge browser version.
 
 ### 2. Merge case lists
 
