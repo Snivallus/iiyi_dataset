@@ -1,5 +1,25 @@
-test/
+# ignore `msedgedriver.exe`, which is used in `click_seemore.py`
+msedgedriver.exe
+
+# ignore results of running `click_seemore.py` on iiyi.com (推荐案例、精选案例和最新案例)
+recommended_cases.json
+selected_cases.json
+newest_cases.json
+
+# track `merged_cases.json`, which is the result of running `merge_cases.py` on the above three files.
+
+# ignore results of running `crawl_cases.py` on `merged_cases.json`
 raw_images/
+succeeded_cases.json
+failed_cases.json
+
+# ignore results of running `../case_filter.py` on `succeeded_cases.json`
 filtered_images/
-*.json
-*.exe
+filtered_cases.json
+discarded_cases.json
+
+# ignore the result of running `../case_rewrite.py` on `filtered_cases.json`
+rewritten_cases.json
+
+# track `final_cases.json` file and `final_images` folder, 
+# which are the results of running `../case_final.py` on `rewritten_cases.json`

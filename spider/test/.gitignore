@@ -1,0 +1,14 @@
+# track `test_cases.json` only
+
+# ignore results of running `../crawl_cases.py` on `test_cases.json`
+test_raw_images/
+test_succeeded_cases.json
+test_failed_cases.json
+
+# ignore results of running `../../case_filter.py` on `test_succeeded_cases.json`
+test_filtered_images/
+test_filtered_cases.json
+test_discarded_cases.json
+
+# ignore results of running `../../case_rewrite.py` on `test_filtered_cases.json`
+test_rewritten_cases.json

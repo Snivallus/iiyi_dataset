@@ -4,14 +4,13 @@ import os
 os.environ["CUDA_VISIBLE_DEVICES"] = "3,4" # Environment settings
 
 import json
-import shutil
 from pathlib import Path
 import torch
 from transformers import AutoModelForCausalLM
 from transformers.generation.utils import GenerationConfig
 import re
-from quick_start import load_model, load_tokenizer # help functions from quick_start.py
-from utils import Tee, dump_case_incrementally # help functions from utils.py
+from quick_start_of_Baichuan2 import load_model, load_tokenizer # help functions from quick_start.py
+from utils import Tee, dump_case_incrementally, copy_images # help functions from utils.py
 
 # ======================
 # Model config
@@ -156,48 +155,6 @@ def judge_case(model, tokenizer, prompt, vote_rounds):
         torch.cuda.empty_cache()
 
     return yes_count > no_count
-
-
-# ======================
-# Copy images
-# ======================
-def copy_images(old_paths, new_case_idx, new_root):
-
-    new_paths = []
-
-    new_root = Path(new_root)
-
-    case_dir_name = f"case_{new_case_idx:04d}"
-    case_img_dir = new_root / case_dir_name
-
-    if not old_paths:
-        return new_paths
-    
-    case_img_dir.mkdir(parents=True, exist_ok=True)
-    
-    for i, p in enumerate(old_paths):
-
-        # 统一路径分隔符
-        p = os.path.normpath(p)
-
-        src = Path(p)
-
-        if not src.exists():
-            print("missing image:", src)
-            continue
-
-        filename = f"img_{i:02d}{src.suffix}"
-
-        dst = case_img_dir / filename
-
-        shutil.copy(src, dst)
-
-        # 统一使用 POSIX 相对路径
-        rel_path = f"{case_dir_name}/{filename}"
-
-        new_paths.append(rel_path)
-
-    return new_paths
 
 # ======================
 # 检查对象或其嵌套字典中是否有键名包含“诊断”

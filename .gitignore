@@ -1,6 +1,8 @@
 # Model cache / large files
 cache/
 offload_tmp/
+
+# Log files of `case_filter.py` and `case_rewrite.py`
 logs/
 
 # Virtual environments

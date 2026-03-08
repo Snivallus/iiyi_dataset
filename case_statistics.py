@@ -48,9 +48,7 @@ def analyze_case_schema(json_file, max_examples=3):
     for case in cases:
         traverse(case)
 
-    # ---------------------
     # 输出统计结果
-    # ---------------------
     print("\n===== Field Statistics =====\n")
 
     for field in sorted(field_count):
