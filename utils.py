@@ -34,7 +34,7 @@ def dump_case_incrementally(output_json, metadata, cases):
 # ======================
 import os
 import shutil
-import pathlib as Path
+from pathlib import Path
 def copy_images(old_paths, new_case_idx, new_root):
 
     new_paths = []

@@ -92,7 +92,8 @@ iiyi_dataset/
 └── ...
 ```
 
-This step removes invalid cases and their coresponding images using [Baichuan2-13B-Chat](https://huggingface.co/baichuan-inc/Baichuan2-13B-Chat).  
+This step removes invalid cases and their coresponding images using [Baichuan2-13B-Chat](https://huggingface.co/baichuan-inc/Baichuan2-13B-Chat),     
+which takes about one hour to complete on two NVIDIA GeForce RTX 4090 GPUs, which is kinds of slow—but free.  
 You can experiment with the model using `quick_start_of_Baichuan2.py`.
 
 ### 3. Analyze case statistics
@@ -131,6 +132,9 @@ iiyi_dataset/
 │   └── ...
 └── ...
 ```
+
+This step takes about 24 hours to complete because DeepSeek is relatively slow.  
+The total token usage is around 6 million, which costs approximately 12 RMB.
 
 ### 5. Final Filtering
 
