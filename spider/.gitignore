@@ -20,6 +20,3 @@ discarded_cases.json
 
 # ignore the result of running `../case_rewrite.py` on `filtered_cases.json`
 rewritten_cases.json
-
-# track `final_cases.json` file and `final_images` folder, 
-# which are the results of running `../case_final.py` on `rewritten_cases.json`
