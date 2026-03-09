@@ -1,6 +1,7 @@
 # iiyi Dataset
 
-This repository contains scripts for constructing a medical case dataset from [iiyi.com](https://bingli.iiyi.com/).
+This repository contains scripts for constructing a medical case dataset from [iiyi.com](https://bingli.iiyi.com/).  
+The dataset is uploaded to [SnivellusSnape/iiyi_dataset](https://huggingface.co/datasets/SnivellusSnape/iiyi_dataset).
 
 ---
 
