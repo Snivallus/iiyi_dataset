@@ -134,7 +134,7 @@ iiyi_dataset/
 ```
 
 This step takes about 24 hours to complete because DeepSeek is relatively slow.  
-The total token usage is around 6 million, which costs approximately 12 RMB.
+The total token usage is around 9 million, which costs approximately 18 RMB.
 
 ### 5. Final Filtering
 
@@ -144,8 +144,9 @@ Run `case_final.py` on `spider/rewritten_cases.json` to get `results/`.
 ```bash
 iiyi_dataset/
 ├── results/
-│   ├── cases.json    # Final cases
-│   ├── images/       # Final images
+│   ├── cases_without_images.json # Cases without images
+│   ├── cases_with_images.json    # Cases with images
+│   ├── images/                   # Corresponding images
 │   │   ├── case_0000/
 │   │   │   ├── img_00.jpg
 │   │   │   ├── img_01.jpg
@@ -155,6 +156,6 @@ iiyi_dataset/
 │   │   │   ├── img_01.jpg
 │   │   │   └── ...
 │   │   └── ...
-│   └── ...
+│   └── discarded_cases.json      # Discarded cases
 └── ...
 ```
