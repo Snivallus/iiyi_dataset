@@ -1,11 +1,11 @@
-# Run `export HF_ENDPOINT=https://hf-mirror.com` in shell before executing this script 
-# to use the mirror endpoint for faster downloads in China mainland.
 import os
 os.environ["CUDA_VISIBLE_DEVICES"] = "3,4" # Environment settings
+os.environ["HF_ENDPOINT"] = "https://hf-mirror.com" # Use the mirror endpoint for faster downloads in China mainland.
 
+import gc
 from pathlib import Path
-
 import torch
+import torch.distributed as dist
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from transformers.generation.utils import GenerationConfig
 
@@ -62,13 +62,28 @@ def chat(model, tokenizer, prompt: str):
 
 def main():
     tokenizer = load_tokenizer()
-    model = load_model()
+    model = None
 
-    prompt = "解释一下“温故而知新”"
-    response = chat(model, tokenizer, prompt)
+    try:
+        model = load_model()
+        
+        prompt = "解释一下“温故而知新”"
+        response = chat(model, tokenizer, prompt)
 
-    print("\n=== Model Response ===")
-    print(response)
+        print("\n=== Model Response ===")
+        print(response)
+
+    finally:
+        print("[CLEANUP] Releasing GPU memory...")
+        if model is not None:
+            del model
+        if tokenizer is not None:
+            del tokenizer
+        if dist.is_initialized():
+            dist.destroy_process_group()
+        gc.collect()
+        torch.cuda.synchronize()
+        torch.cuda.empty_cache()
 
 
 if __name__ == "__main__":

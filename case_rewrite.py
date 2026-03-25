@@ -1,4 +1,4 @@
-# Run `export DEEPSEEK_API_KEY=your_key` in shell before executing this script.
+# Run `export DEEPSEEK_API_KEY=<your_key>` in shell before executing this script.
 import os
 import json
 import re

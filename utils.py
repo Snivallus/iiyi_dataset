@@ -38,7 +38,6 @@ from pathlib import Path
 def copy_images(old_paths, new_case_idx, new_root):
 
     new_paths = []
-
     new_root = Path(new_root)
 
     case_dir_name = f"case_{new_case_idx:04d}"
@@ -53,7 +52,6 @@ def copy_images(old_paths, new_case_idx, new_root):
 
         # 统一路径分隔符
         p = os.path.normpath(p)
-
         src = Path(p)
 
         if not src.exists():
@@ -61,14 +59,11 @@ def copy_images(old_paths, new_case_idx, new_root):
             continue
 
         filename = f"img_{i:02d}{src.suffix}"
-
         dst = case_img_dir / filename
-
         shutil.copy(src, dst)
 
         # 统一使用 POSIX 相对路径
         rel_path = f"{case_dir_name}/{filename}"
-
         new_paths.append(rel_path)
 
     return new_paths

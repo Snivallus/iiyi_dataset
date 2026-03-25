@@ -1,15 +1,16 @@
-# Run `export HF_ENDPOINT=https://hf-mirror.com` in shell before executing this script 
-# to use the mirror endpoint for faster downloads in China mainland.
 import os
 os.environ["CUDA_VISIBLE_DEVICES"] = "3,4" # Environment settings
+os.environ["HF_ENDPOINT"] = "https://hf-mirror.com" # Use the mirror endpoint for faster downloads in China mainland.
 
+import gc
 import json
 from pathlib import Path
 import torch
+import torch.distributed as dist
 from transformers import AutoModelForCausalLM
 from transformers.generation.utils import GenerationConfig
 import re
-from quick_start_of_Baichuan2 import load_model, load_tokenizer # help functions from quick_start.py
+from quick_start_of_Baichuan2 import load_tokenizer # help functions from quick_start.py
 from utils import Tee, dump_case_incrementally, copy_images # help functions from utils.py
 
 # ======================
@@ -127,9 +128,17 @@ def judge_case(model, tokenizer, prompt, vote_rounds):
     no_count = 0
 
     for i in range(vote_rounds):
-        resp = chat_once(model, tokenizer, prompt)
-
-        decision = parse_yes_no(resp)
+        resp = None
+        try:
+            resp = chat_once(model, tokenizer, prompt)
+            decision = parse_yes_no(resp)
+        except Exception as e:
+            print(f"[ERROR] inference failed: {e}")
+            decision = None
+        finally:
+            if resp is not None:
+                del resp
+            torch.cuda.empty_cache()
 
         if decision == "是":
             yes_count += 1
@@ -140,19 +149,10 @@ def judge_case(model, tokenizer, prompt, vote_rounds):
 
         # 提前结束 (投票稳定化)
         if yes_count >= vote_rounds // 2 + 1:
-            # 清理显存
-            del resp
-            torch.cuda.empty_cache()
             return True
 
         if no_count >= vote_rounds // 2 + 1:
-            del resp
-            torch.cuda.empty_cache()
             return False
-
-        # 每轮都释放临时显存
-        del resp
-        torch.cuda.empty_cache()
 
     return yes_count > no_count
 
@@ -243,311 +243,301 @@ def filter_cases(
     # 加载 tokenizer 和模型
     # -------------------
     tokenizer = load_tokenizer()
+    model = None
 
-    model = AutoModelForCausalLM.from_pretrained(
-        MODEL_NAME,
-        revision=MODEL_REVISION,
-        device_map="auto",
-        max_memory={0: "15GiB", 1: "15GiB"},
-        torch_dtype=DTYPE,
-        trust_remote_code=True,
-        cache_dir=CACHE_DIR,
-    )
+    try:
+        model = AutoModelForCausalLM.from_pretrained(
+            MODEL_NAME,
+            revision=MODEL_REVISION,
+            device_map="auto",
+            max_memory={0: "15GiB", 1: "15GiB"},
+            torch_dtype=DTYPE,
+            trust_remote_code=True,
+            cache_dir=CACHE_DIR,
+        )
 
-    # 加载并修改 generation 配置
-    model.generation_config = GenerationConfig.from_pretrained(
-        MODEL_NAME,
-        revision=MODEL_REVISION,
-        cache_dir=CACHE_DIR,
-    )
+        # 加载并修改 generation 配置
+        model.generation_config = GenerationConfig.from_pretrained(
+            MODEL_NAME,
+            revision=MODEL_REVISION,
+            cache_dir=CACHE_DIR,
+        )
 
-    model.generation_config.temperature = temperature
-    model.generation_config.top_p = top_p
-    model.generation_config.max_new_tokens = max_new_tokens
-
-    # -------------------
-    # 读取输入 JSON
-    # -------------------
-    with open(input_json, encoding="utf-8") as f:
-        data = json.load(f)
-
-    cases = data["cases"]
-
-    # -------------------
-    # 去重准备（跨 case + 内部重复）
-    # -------------------
-    # string_to_case_idx:
-    #   记录某个字符串出现在哪些 case 中
-    #   string -> {case_idx1, case_idx2, ...}
-    #
-    # case_idx_to_strings:
-    #   每个 case 中出现的字符串及其路径
-    #   case_idx -> [(string, path), ...]
-    #
-    # case_string_count:
-    #   每个 case 中每个字符串出现次数
-    #   case_idx -> {string: count}
-    # -------------------
-    string_to_case_idx = {}
-    case_idx_to_strings = {}
-    case_string_count = {}
-
-    for case in cases:
-
-        case_idx = case["case_idx"]
-
-        # collected:
-        #   存储该 case 中所有字符串及其路径
-        #   [(string, "字段路径"), ...]
-        collected = []
+        model.generation_config.temperature = temperature
+        model.generation_config.top_p = top_p
+        model.generation_config.max_new_tokens = max_new_tokens
 
         # -------------------
-        # 递归提取 case 中的所有字符串
+        # 读取输入 JSON
         # -------------------
-        def collect_strings(obj, path=""):
+        with open(input_json, encoding="utf-8") as f:
+            data = json.load(f)
 
-            if isinstance(obj, str):
-
-                # 记录字符串及其字段路径
-                collected.append((obj, path))
-
-            elif isinstance(obj, dict):
-
-                for k, v in obj.items():
-
-                    new_path = f"{path}.{k}" if path else k
-
-                    collect_strings(v, new_path)
-
-            elif isinstance(obj, list):
-
-                for i, v in enumerate(obj):
-
-                    new_path = f"{path}[{i}]"
-
-                    collect_strings(v, new_path)
-
-        collect_strings(case)
-
-        case_idx_to_strings[case_idx] = collected
+        cases = data["cases"]
 
         # -------------------
-        # 统计字符串出现次数
+        # 去重准备（跨 case + 内部重复）
         # -------------------
-
-        string_count = {}
-
-        for s, path in collected:
-
-            # 忽略过短字符串
-            if len(s) < DUPLICATE_STRING_MIN_LEN:
-                continue
-
-            # 记录该 case 内出现次数
-            string_count[s] = string_count.get(s, 0) + 1
-
-            # 记录该字符串出现在哪些 case
-            if s not in string_to_case_idx:
-                string_to_case_idx[s] = set()
-
-            string_to_case_idx[s].add(case_idx)
-
-        case_string_count[case_idx] = string_count
-
-    # -------------------
-    # 跨 case + 内部重复判定
-    #
-    # 只删除满足以下两个条件的 case: 
-    #
-    # 1. 某字符串在该 case 中出现 >= 2 次
-    # 2. 同时该字符串也出现在其他 case 中
-    # -------------------
-    duplicate_case_idx = {}
-
-    for case_idx, string_count in case_string_count.items():
-
-        for s, count in string_count.items():
-
-            # case 内必须重复
-            if count < 2:
-                continue
-
-            # 该字符串必须跨 case 出现
-            if len(string_to_case_idx.get(s, set())) <= 1:
-                continue
-
-            duplicate_case_idx.setdefault(case_idx, set()).add(s)
-
-    kept_cases = []
-    discarded_cases = []
-
-    for case in cases:
-
-        idx = case["case_idx"]
-
+        # string_to_case_idx:
+        #   记录某个字符串出现在哪些 case 中
+        #   string -> {case_idx1, case_idx2, ...}
+        #
+        # case_idx_to_strings:
+        #   每个 case 中出现的字符串及其路径
+        #   case_idx -> [(string, path), ...]
+        #
+        # case_string_count:
+        #   每个 case 中每个字符串出现次数
+        #   case_idx -> {string: count}
         # -------------------
-        # 删除跨 case + 内部重复的 case
-        # -------------------
-        if idx in duplicate_case_idx:
+        string_to_case_idx = {}
+        case_idx_to_strings = {}
+        case_string_count = {}
 
-            discarded_cases.append(case)
+        for case in cases:
 
-            print(
-                f"Duplicate (internal + cross-case), discard case {idx}, strings:\n"
-                f"{duplicate_case_idx[idx]}\n"
-            )
+            case_idx = case["case_idx"]
 
-            continue
+            # collected:
+            #   存储该 case 中所有字符串及其路径
+            #   [(string, "字段路径"), ...]
+            collected = []
 
-        # -------------------
-        # 同一 case 内部重复清理
-        # 
-        # 如果一个字符串在多个字段重复, 
-        # 删除重复字段, 只保留一个.
-        # -------------------
-        pairs = case_idx_to_strings[idx]
+            # -------------------
+            # 递归提取 case 中的所有字符串
+            # -------------------
+            def collect_strings(obj, path=""):
+                if isinstance(obj, str):
+                    # 记录字符串及其字段路径
+                    collected.append((obj, path))
 
-        # string -> [path1, path2, ...]
-        string_paths = {}
-
-        for s, path in pairs:
-            if len(s) < DUPLICATE_STRING_MIN_LEN:
-                continue
-            string_paths.setdefault(s, []).append(path)
-
-        repeated_strings = []
-
-        for s, paths in string_paths.items():
-            if len(paths) <= 1:
-                continue
-            # 忽略仅标题重复的情况
-            non_title_paths = [p for p in paths if not p.startswith("标题")]
-            if len(non_title_paths) <= 1:
-                continue
-            repeated_strings.append(s)
-
-        # -------------------
-        # 删除重复字段
-        # -------------------
-        if repeated_strings:
-
-            def remove_repeated(obj, path=""):
-
-                if isinstance(obj, dict):
-
-                    keys_to_delete = []
-
+                elif isinstance(obj, dict):
                     for k, v in obj.items():
-
                         new_path = f"{path}.{k}" if path else k
-
-                        # 永远保留标题
-                        if new_path == "标题":
-                            continue
-
-                        if isinstance(v, str) and v in repeated_strings:
-                            keys_to_delete.append(k)
-
-                        else:
-                            remove_repeated(v, new_path)
-
-                    for k in keys_to_delete:
-                        del obj[k]
+                        collect_strings(v, new_path)
 
                 elif isinstance(obj, list):
+                    for i, v in enumerate(obj):
+                        new_path = f"{path}[{i}]"
+                        collect_strings(v, new_path)
 
-                    for i in range(len(obj) - 1, -1, -1):
+            collect_strings(case)
+            case_idx_to_strings[case_idx] = collected
 
-                        v = obj[i]
+            # -------------------
+            # 统计字符串出现次数
+            # -------------------
+            string_count = {}
+            for s, path in collected:
+                # 忽略过短字符串
+                if len(s) < DUPLICATE_STRING_MIN_LEN:
+                    continue
 
-                        if isinstance(v, str) and v in repeated_strings:
-                            obj.pop(i)
+                # 记录该 case 内出现次数
+                string_count[s] = string_count.get(s, 0) + 1
 
-                        else:
-                            remove_repeated(v, f"{path}[{i}]")
+                # 记录该字符串出现在哪些 case
+                if s not in string_to_case_idx:
+                    string_to_case_idx[s] = set()
 
-            remove_repeated(case)
+                string_to_case_idx[s].add(case_idx)
 
-            case["重复描述"] = "；".join(repeated_strings)
-
-            print(
-                f"Internal repeated strings removed for case {idx}:\n"
-                f"{repeated_strings}\n"
-            )
-
-        kept_cases.append(case)
-
-    print(
-        f"De-duplication done, kept {len(kept_cases)} cases, "
-        f"discarded {len(discarded_cases)} cases\n"
-    )
-
-    # -------------------
-    # 模型筛选
-    # 
-    # 使用 LLM 判断 case 是否包含明确诊断
-    # -------------------
-    new_root = Path(new_image_root)
-
-    final_kept_cases = []
-    final_discarded_cases = discarded_cases.copy()
-
-    for case in kept_cases:
-
-        old_idx = case["case_idx"]
-
-        # 如果 case 中存在诊断相关字段
-        if has_diagnosis_key(case):
-            title = case.get("标题", "")
-            diagnosis_texts = collect_diagnosis_text(case)
-            diagnosis_combined = "；".join(diagnosis_texts)
-            prompt = PROMPT_TEMPLATE_1.format(
-                title=title,
-                diagnosis_combined=diagnosis_combined
-            )
-            keep = judge_case(model, tokenizer, prompt, vote_rounds)
-        else:
-            # 否则使用完整 case 文本判断
-            case_text = case_to_text(case)
-            prompt = PROMPT_TEMPLATE_2.format(case_text=case_text)
-            keep = judge_case(model, tokenizer, prompt, vote_rounds)
+            case_string_count[case_idx] = string_count
 
         # -------------------
-        # 保留 case
+        # 跨 case + 内部重复判定
+        #
+        # 只删除满足以下两个条件的 case: 
+        #
+        # 1. 某字符串在该 case 中出现 >= 2 次
+        # 2. 同时该字符串也出现在其他 case 中
         # -------------------
-        if keep:
-            new_idx = len(final_kept_cases)
-            new_case = case.copy()
-            new_case["case_idx"] = new_idx
+        duplicate_case_idx = {}
+        for case_idx, string_count in case_string_count.items():
+            for s, count in string_count.items():
+                # case 内必须重复
+                if count < 2:
+                    continue
 
-            # 复制图片到新目录
-            imgs = case.get("images", [])
-            old_paths = [os.path.join(image_root, img) for img in imgs]
-            new_paths = copy_images(old_paths, new_idx, new_root)
-            new_case["images"] = new_paths
-            final_kept_cases.append(new_case)
-            print(f"Kept case {old_idx} as new case {new_idx}\n")
+                # 该字符串必须跨 case 出现
+                if len(string_to_case_idx.get(s, set())) <= 1:
+                    continue
 
-        else:
-            final_discarded_cases.append(case)
-            print(f"Discarded by model case {old_idx}\n")
+                duplicate_case_idx.setdefault(case_idx, set()).add(s)
 
-    # -------------------
-    # 输出结果 JSON
-    # -------------------
-    dump_case_incrementally(
-        output_json,
-        {"total_cases": len(final_kept_cases)},
-        final_kept_cases
-    )
+        kept_cases = []
+        discarded_cases = []
+        for case in cases:
+            idx = case["case_idx"]
+            # -------------------
+            # 删除跨 case + 内部重复的 case
+            # -------------------
+            if idx in duplicate_case_idx:
+                discarded_cases.append(case)
+                print(
+                    f"Duplicate (internal + cross-case), discard case {idx}, strings:\n"
+                    f"{duplicate_case_idx[idx]}\n"
+                )
+                continue
 
-    dump_case_incrementally(
-        discard_json,
-        {"discarded_cases": len(final_discarded_cases)},
-        final_discarded_cases
-    )
+            # -------------------
+            # 同一 case 内部重复清理
+            # 
+            # 如果一个字符串在多个字段重复, 
+            # 删除重复字段, 只保留一个.
+            # -------------------
+            pairs = case_idx_to_strings[idx]
 
-    print("Filtering done.\n")
+            # string -> [path1, path2, ...]
+            string_paths = {}
+
+            for s, path in pairs:
+                if len(s) < DUPLICATE_STRING_MIN_LEN:
+                    continue
+                string_paths.setdefault(s, []).append(path)
+
+            repeated_strings = []
+
+            for s, paths in string_paths.items():
+                if len(paths) <= 1:
+                    continue
+                # 忽略仅标题重复的情况
+                non_title_paths = [p for p in paths if not p.startswith("标题")]
+                if len(non_title_paths) <= 1:
+                    continue
+                repeated_strings.append(s)
+
+            # -------------------
+            # 删除重复字段
+            # -------------------
+            if repeated_strings:
+                def remove_repeated(obj, path=""):
+                    if isinstance(obj, dict):
+                        keys_to_delete = []
+                        for k, v in obj.items():
+                            new_path = f"{path}.{k}" if path else k
+                            # 永远保留标题
+                            if new_path == "标题":
+                                continue
+
+                            if isinstance(v, str) and v in repeated_strings:
+                                keys_to_delete.append(k)
+
+                            else:
+                                remove_repeated(v, new_path)
+
+                        for k in keys_to_delete:
+                            del obj[k]
+
+                    elif isinstance(obj, list):
+                        for i in range(len(obj) - 1, -1, -1):
+                            v = obj[i]
+                            if isinstance(v, str) and v in repeated_strings:
+                                obj.pop(i)
+                            else:
+                                remove_repeated(v, f"{path}[{i}]")
+
+                remove_repeated(case)
+                case["重复描述"] = "；".join(repeated_strings)
+                print(
+                    f"Internal repeated strings removed for case {idx}:\n"
+                    f"{repeated_strings}\n"
+                )
+
+            kept_cases.append(case)
+
+        print(
+            f"De-duplication done, kept {len(kept_cases)} cases, "
+            f"discarded {len(discarded_cases)} cases\n"
+        )
+
+        # -------------------
+        # 模型筛选
+        # 
+        # 使用 LLM 判断 case 是否包含明确诊断
+        # -------------------
+        new_root = Path(new_image_root)
+
+        final_kept_cases = []
+        final_discarded_cases = discarded_cases.copy()
+
+        for case in kept_cases:
+            try:
+                old_idx = case["case_idx"]
+
+                # 如果 case 中存在诊断相关字段
+                if has_diagnosis_key(case):
+                    title = case.get("标题", "")
+                    diagnosis_texts = collect_diagnosis_text(case)
+                    diagnosis_combined = "；".join(diagnosis_texts)
+                    prompt = PROMPT_TEMPLATE_1.format(
+                        title=title,
+                        diagnosis_combined=diagnosis_combined
+                    )
+                    keep = judge_case(model, tokenizer, prompt, vote_rounds)
+                else:
+                    # 否则使用完整 case 文本判断
+                    case_text = case_to_text(case)
+                    prompt = PROMPT_TEMPLATE_2.format(case_text=case_text)
+                    keep = judge_case(model, tokenizer, prompt, vote_rounds)
+
+                # -------------------
+                # 保留 case
+                # -------------------
+                if keep:
+                    new_idx = len(final_kept_cases)
+                    new_case = case.copy()
+                    new_case["case_idx"] = new_idx
+
+                    # 复制图片到新目录
+                    imgs = case.get("images", [])
+                    old_paths = [os.path.join(image_root, img) for img in imgs]
+                    try:
+                        new_paths = copy_images(old_paths, new_idx, new_root)
+                    except Exception as e:
+                        print(f"[WARN] image copy failed: {e}")
+                        new_paths = []
+                    new_case["images"] = new_paths
+                    final_kept_cases.append(new_case)
+                    print(f"Kept case {old_idx} as new case {new_idx}\n")
+
+                else:
+                    final_discarded_cases.append(case)
+                    print(f"Discarded by model case {old_idx}\n")
+            
+            except Exception as e:
+                print(f"[ERROR] Case {case.get('case_idx')} failed: {e}")
+                final_discarded_cases.append(case)
+                continue
+
+        # -------------------
+        # 输出结果 JSON
+        # -------------------
+        dump_case_incrementally(
+            output_json,
+            {"total_cases": len(final_kept_cases)},
+            final_kept_cases
+        )
+
+        dump_case_incrementally(
+            discard_json,
+            {"discarded_cases": len(final_discarded_cases)},
+            final_discarded_cases
+        )
+
+        print("Filtering done.\n")
+    
+    finally:
+        print("[CLEANUP] Releasing GPU memory...")
+        if model is not None:
+            del model
+        if tokenizer is not None:
+            del tokenizer
+        if dist.is_initialized():
+            dist.destroy_process_group()
+        gc.collect()
+        torch.cuda.synchronize()
+        torch.cuda.empty_cache()
 
 
 if __name__ == "__main__":
